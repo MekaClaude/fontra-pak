@@ -1,8 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 import sys
+import os
 from importlib.metadata import PackageNotFoundError
 from PyInstaller.utils.hooks import collect_all, copy_metadata
 from fontra import __version__ as fontraVersion
+
+# Set versioned output directory
+version_output_dir = f"dist/Fontra-Pak-v{fontraVersion}"
 
 
 def buildWindowsVersionResource():
@@ -179,3 +183,17 @@ else:
         icon="icon/FontraIcon.ico",
         version=buildWindowsVersionResource() if sys.platform == "win32" else None,
     )
+    
+    # Create versioned output directory
+    if sys.platform == "win32":
+        import shutil
+        if os.path.exists(version_output_dir):
+            shutil.rmtree(version_output_dir)
+        os.makedirs(version_output_dir, exist_ok=True)
+        
+        # Copy executable to versioned folder
+        exe_path = os.path.join("dist", "Fontra Pak.exe")
+        versioned_exe_path = os.path.join(version_output_dir, "Fontra Pak.exe")
+        if os.path.exists(exe_path):
+            shutil.copy2(exe_path, versioned_exe_path)
+            print(f"\n✓ Built versioned executable: {versioned_exe_path}")
