@@ -1,126 +1,118 @@
 # -*- mode: python ; coding: utf-8 -*-
-import sys
+"""PyInstaller spec file for Fontra Pak.
+
+This spec file builds a standalone executable for the Fontra Pak application,
+a browser-based font editor bundled with PyInstaller.
+
+Platform support:
+- Windows: Produces Fontra Pak.exe with version info
+- macOS: Produces Fontra Pak.app bundle with proper codesigning support
+- Linux: Produces fontrapak executable
+"""
+
 import os
-from importlib.metadata import PackageNotFoundError
-from PyInstaller.utils.hooks import collect_all, copy_metadata
-from fontra import __version__ as fontraVersion
+import sys
 
-# Set versioned output directory
-version_output_dir = f"dist/Fontra-Pak-v{fontraVersion}"
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
+# Compute absolute paths based on spec file location
+spec_dir = os.path.dirname(os.path.abspath(__file__))
+src_dir = os.path.join(spec_dir, "..", "src")
 
-def buildWindowsVersionResource():
-    from PyInstaller.utils.win32.versioninfo import (
-        VSVersionInfo,
-        FixedFileInfo,
-        StringFileInfo,
-        StringTable,
-        StringStruct,
-        VarFileInfo,
-        VarStruct,
-    )
+# Collect all fontra submodules dynamically
+fontra_hiddenimports = collect_submodules("fontra")
 
-    y, m, patch, *extra = fontraVersion.split(".", maxsplit=3)
-    y, m, patch = [int(v) for v in (y, m, patch)]
-
-    return VSVersionInfo(
-        ffi=FixedFileInfo(
-            filevers=(y, m, patch, 0),
-            prodvers=(y, m, patch, 0),
-            mask=0x3F,
-            flags=0x0,
-            OS=0x4,
-            fileType=0x1,
-            subtype=0x0,
-            date=(0, 0),
-        ),
-        kids=[
-            StringFileInfo(
-                [
-                    StringTable(
-                        "040904B0",
-                        [
-                            StringStruct("CompanyName", "Fontra.xyz"),
-                            StringStruct("FileDescription", "Fontra Pak"),
-                            StringStruct("FileVersion", fontraVersion),
-                            StringStruct("InternalName", "Fontra Pak"),
-                            StringStruct(
-                                "LegalCopyright", "© Google LLC, Just van Rossum"
-                            ),
-                            StringStruct("OriginalFilename", "Fontra Pak.exe"),
-                            StringStruct("ProductName", "Fontra Pak"),
-                            StringStruct("ProductVersion", fontraVersion),
-                        ],
-                    )
-                ]
-            ),
-            VarFileInfo([VarStruct("Translation", [1033, 1200])]),
-        ],
-    )
-
-
-datas = []
-binaries = []
-hiddenimports = []
-
-modules_to_collect_all = [
-    "fontra",
-    "fontra_compile",
-    "fontra_glyphs",
-    "fontra_rcjk",
-    "cffsubr",
-    "openstep_plist",
-    "glyphsLib.data",
-]
-for module_name in modules_to_collect_all:
-    tmp_ret = collect_all(module_name)
-    datas += tmp_ret[0]
-    binaries += tmp_ret[1]
-    hiddenimports += tmp_ret[2]
+# Collect external fontra plugins if available
+external_plugins = []
+for plugin_name in ["fontra_compile", "fontra_glyphs", "fontra_rcjk"]:
     try:
-        datas += copy_metadata(module_name)
-    except PackageNotFoundError:
-        print("no metadata for", module_name)
+        external_plugins.extend(collect_submodules(plugin_name))
+    except Exception:
+        pass  # Plugin not installed, skip
 
+hiddenimports = fontra_hiddenimports + external_plugins
 
 block_cipher = None
 
-
 a = Analysis(
     ["FontraPakMain.py"],
-    pathex=[],
-    binaries=binaries,
-    datas=datas,
+    pathex=[src_dir],
+    binaries=[],
+    datas=[
+        ("../src/fontra", "fontra"),
+        ("icon/FontraIcon.ico", "icon"),
+    ],
     hiddenimports=hiddenimports,
-    hookspath=[],
+    hookspath=["."],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        # Test frameworks
+        "pytest",
+        "pyunittest",
+        "nose",
+        "unittest",
+        # Development tools
+        "sphinx",
+        "docutils",
+        "jinja2",
+        "markupsafe",
+        # Heavy scientific packages not needed for font editing
+        "matplotlib",
+        "numpy",
+        "scipy",
+        "pandas",
+        # ML/AI packages
+        "tensorflow",
+        "torch",
+        "sklearn",
+        # Other GUI frameworks
+        "tkinter",
+        "wx",
+        "gtk",
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# UPX exclude list - Qt libraries can be problematic with UPX
+upx_exclude = [
+    "PyQt6",
+    "PyQt6.QtCore",
+    "PyQt6.QtGui",
+    "PyQt6.QtWidgets",
+    "Qt6",
+    "libpng16",
+    "libjpeg",
+]
+
 if sys.platform == "darwin":
+    # macOS: Build universal2 binary for Intel and Apple Silicon
     exe = EXE(
         pyz,
         a.scripts,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
         [],
-        exclude_binaries=True,
         name="Fontra Pak",
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
         upx=True,
+        upx_exclude=upx_exclude,
+        runtime_tmpdir=None,
         console=False,
         disable_windowed_traceback=False,
         argv_emulation=False,
         target_arch="universal2",
         codesign_identity=None,
         entitlements_file=None,
-        icon="icon/FontraIcon.ico",
+        icon="icon/FontraIcon.icns",
     )
     coll = COLLECT(
         exe,
@@ -129,7 +121,7 @@ if sys.platform == "darwin":
         a.datas,
         strip=False,
         upx=True,
-        upx_exclude=[],
+        upx_exclude=upx_exclude,
         name="Fontra Pak",
     )
     app = BUNDLE(
@@ -137,11 +129,10 @@ if sys.platform == "darwin":
         name="Fontra Pak.app",
         icon="icon/FontraIcon.icns",
         bundle_identifier="xyz.fontra.fontra-pak",
-        version=fontraVersion,
         info_plist={
             "CFBundleDocumentTypes": [
-                dict(
-                    CFBundleTypeExtensions=[
+                {
+                    "CFBundleTypeExtensions": [
                         "ttf",
                         "otf",
                         "woff",
@@ -154,12 +145,13 @@ if sys.platform == "darwin":
                         "fontra",
                         "rcjk",
                     ],
-                    CFBundleTypeRole="Editor",
-                ),
+                    "CFBundleTypeRole": "Editor",
+                },
             ],
         },
     )
-else:
+elif sys.platform == "win32":
+    # Windows: Build with version info
     exe = EXE(
         pyz,
         a.scripts,
@@ -167,12 +159,12 @@ else:
         a.zipfiles,
         a.datas,
         [],
-        name="Fontra Pak" if sys.platform == "win32" else "fontrapak",
+        name="Fontra Pak",
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
         upx=True,
-        upx_exclude=[],
+        upx_exclude=upx_exclude,
         runtime_tmpdir=None,
         console=False,
         disable_windowed_traceback=False,
@@ -181,19 +173,29 @@ else:
         codesign_identity=None,
         entitlements_file=None,
         icon="icon/FontraIcon.ico",
-        version=buildWindowsVersionResource() if sys.platform == "win32" else None,
+        version="version-info.txt",
     )
-    
-    # Create versioned output directory
-    if sys.platform == "win32":
-        import shutil
-        if os.path.exists(version_output_dir):
-            shutil.rmtree(version_output_dir)
-        os.makedirs(version_output_dir, exist_ok=True)
-        
-        # Copy executable to versioned folder
-        exe_path = os.path.join("dist", "Fontra Pak.exe")
-        versioned_exe_path = os.path.join(version_output_dir, "Fontra Pak.exe")
-        if os.path.exists(exe_path):
-            shutil.copy2(exe_path, versioned_exe_path)
-            print(f"\n✓ Built versioned executable: {versioned_exe_path}")
+else:
+    # Linux and other platforms
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        [],
+        name="fontrapak",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=upx_exclude,
+        runtime_tmpdir=None,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon="icon/FontraIcon.ico",
+    )
