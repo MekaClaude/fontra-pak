@@ -10,13 +10,14 @@ Platform support:
 - Linux: Produces fontrapak executable
 """
 
+import glob
 import os
 import sys
 
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 # Compute absolute paths based on spec file location
-spec_dir = os.path.dirname(os.path.abspath(__file__))
+spec_dir = SPECPATH
 src_dir = os.path.join(spec_dir, "..", "src")
 
 # Collect all fontra submodules dynamically
@@ -30,7 +31,41 @@ for plugin_name in ["fontra_compile", "fontra_glyphs", "fontra_rcjk"]:
     except Exception:
         pass  # Plugin not installed, skip
 
-hiddenimports = fontra_hiddenimports + external_plugins
+# Explicitly list all backend modules so they are never tree-shaken
+explicit_backends = [
+    "fontra.backends.designspace",
+    "fontra.backends.opentype",
+    "fontra.backends.fontra",
+    "fontra.backends.workflow",
+    "fontra.backends.copy",
+    "fontra.backends.populate",
+    "fontra.filesystem.projectmanager",
+    "fontra.workflow.workflow",
+    "fontra.workflow.command",
+]
+
+hiddenimports = fontra_hiddenimports + external_plugins + explicit_backends
+
+# -----------------------------------------------------------------------
+# Collect dist-info for fontra so importlib.metadata.entry_points() works
+# at runtime inside the frozen bundle. Without this, the backend registry
+# is empty and every file type raises UnknownFileType.
+# -----------------------------------------------------------------------
+fontra_distinfo_datas = []
+try:
+    from importlib.metadata import packages_distributions, Distribution
+    dist = Distribution.from_name("fontra")
+    di_path = str(dist._path)  # path to the dist-info directory
+    fontra_distinfo_datas.append((di_path, os.path.basename(di_path)))
+except Exception as e:
+    print(f"WARNING: Could not find fontra dist-info: {e}")
+    # Fallback: glob for it
+    import glob
+    for sp in sys.path:
+        pattern = os.path.join(sp, "fontra-*.dist-info")
+        for di_path in glob.glob(pattern):
+            fontra_distinfo_datas.append((di_path, os.path.basename(di_path)))
+            break
 
 block_cipher = None
 
@@ -40,8 +75,8 @@ a = Analysis(
     binaries=[],
     datas=[
         ("../src/fontra", "fontra"),
-        ("icon/FontraIcon.ico", "icon"),
-    ],
+        ("../.skills-data-prompt/fontra-dev-logo/fontra-icon.ico", "icon"),
+    ] + fontra_distinfo_datas,
     hiddenimports=hiddenimports,
     hookspath=["."],
     hooksconfig={},
@@ -172,7 +207,7 @@ elif sys.platform == "win32":
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
-        icon="icon/FontraIcon.ico",
+        icon="../.skills-data-prompt/fontra-dev-logo/fontra-icon.ico",
         version="version-info.txt",
     )
 else:
