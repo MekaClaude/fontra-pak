@@ -1,0 +1,5 @@
+FONTRA PAK
+Version: 2026.3.3.16
+Build Date: 2026-03-17
+Platform: Windows x64
+Type: Standalone Executable

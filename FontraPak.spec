@@ -77,7 +77,7 @@ a = Analysis(
         ("../src/fontra", "fontra"),
         ("../.skills-data-prompt/fontra-dev-logo/fontra-icon.ico", "icon"),
     ] + fontra_distinfo_datas,
-    hiddenimports=hiddenimports,
+    hiddenimports=hiddenimports + ["fontra_compile"],
     hookspath=["."],
     hooksconfig={},
     runtime_hooks=[],
