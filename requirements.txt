@@ -1,10 +1,4 @@
-git+https://github.com/fontra/fontra.git
-git+https://github.com/fontra/fontra-compile.git
-git+https://github.com/fontra/fontra-rcjk.git
-git+https://github.com/fontra/fontra-glyphs.git
-aiohttp==3.13.3
-setuptools==82.0.0
-PyQt6==6.7.1
-PyQt6-Qt6==6.7.3
-PyQt6-sip==13.10.3
-psutil==7.2.2
+fontmake>=3.8.0
+fontTools[ufo,unicode,woff]>=4.40
+uharfbuzz>=0.23.0
+ufo2ft>=3.7.0
