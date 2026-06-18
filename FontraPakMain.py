@@ -18,6 +18,7 @@ from random import random
 from urllib.parse import quote
 from urllib.request import urlopen
 
+import certifi
 import psutil
 from fontra import __version__ as fontraVersion
 from fontra.backends import getFileSystemBackend, newFileSystemBackend
@@ -27,6 +28,7 @@ from fontra.core.classes import DiscreteFontAxis
 from fontra.core.server import FontraServer, findFreeTCPPort
 from fontra.core.urlfragment import dumpURLFragment
 from fontra.filesystem.projectmanager import FileSystemProjectManager
+from fontTools.ttLib.woff2 import compress as woff2Compress
 from PyQt6.QtCore import (
     QEvent,
     QObject,
@@ -39,6 +41,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
     QGridLayout,
     QLabel,
@@ -92,16 +95,22 @@ fileTypes = [
     ("Fontra", "fontra"),
     ("Designspace", "designspace"),
     ("Unified Font Object", "ufo"),
+    ("RoboCJK", "rcjk"),
 ]
 
 fileTypesMapping = {
     f"{name} (*.{extension})": f".{extension}" for name, extension in fileTypes
 }
 
+fileTypesMappingForNewFont = {
+    key: value for key, value in fileTypesMapping.items() if "rcjk" not in value
+}
+
 exportFileTypes = [
     # name, extension
     ("TrueType", "ttf"),
     ("OpenType", "otf"),
+    ("Webfont", "woff2"),
 ] + fileTypes
 
 exportFileTypesMapping = {
@@ -178,6 +187,17 @@ class FontraMainWidget(QMainWindow):
 
         layout.addWidget(self.label, 1, 0, 1, 2)
 
+        readOnlyCheckBox = QCheckBox("Open fonts in read-only mode")
+        readOnlyCheckBox.setCheckState(
+            Qt.CheckState.Checked
+            if applicationSettings.value("openFontsInReadOnlyMode", False, type=bool)
+            else Qt.CheckState.Unchecked
+        )
+        readOnlyCheckBox.stateChanged.connect(
+            lambda s: applicationSettings.setValue("openFontsInReadOnlyMode", bool(s))
+        )
+        layout.addWidget(readOnlyCheckBox, 2, 0)
+
         self.sampleTextBox = QPlainTextEdit(
             applicationSettings.value("editorSampleText", ""), self
         )
@@ -192,19 +212,19 @@ class FontraMainWidget(QMainWindow):
                 "editorSampleText", self.sampleTextBox.toPlainText()
             )
         )
-        layout.addWidget(QLabel("Sample text:"), 2, 0)
-        layout.addWidget(self.sampleTextBox, 3, 0, 1, 2)
+        layout.addWidget(QLabel("Sample text:"), 3, 0)
+        layout.addWidget(self.sampleTextBox, 4, 0, 1, 2)
 
-        layout.addWidget(QLabel(f"Fontra version {fontraVersion}"), 4, 0)
+        layout.addWidget(QLabel(f"Fontra version {fontraVersion}"), 5, 0)
 
-        if sys.platform in {"darwin", "win32"}:
+        if sys.platform in {"darwin", "win32", "linux"}:
             self.downloadButton = QPushButton("Download latest Fontra Pak", self)
             self.downloadButton.setSizePolicy(
                 QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
             )
             self.downloadButton.clicked.connect(self.goToLatestDownload)
             layout.addWidget(
-                self.downloadButton, 4, 1, alignment=Qt.AlignmentFlag.AlignRight
+                self.downloadButton, 5, 1, alignment=Qt.AlignmentFlag.AlignRight
             )
             if "test-startup" not in sys.argv:
                 self.checkForUpdate(1500)
@@ -261,14 +281,14 @@ class FontraMainWidget(QMainWindow):
             self,
             "New Font...",
             os.path.join(self.activeFolder, "Untitled"),
-            ";;".join(fileTypesMapping),
+            ";;".join(fileTypesMappingForNewFont),
         )
 
         if not fontPath:
             # User cancelled
             return
 
-        fontPath = getFontPath(fontPath, fileType, fileTypesMapping)
+        fontPath = getFontPath(fontPath, fileType, fileTypesMappingForNewFont)
 
         applicationSettings.setValue("activeFolder", os.path.dirname(fontPath))
 
@@ -442,7 +462,9 @@ def _fetchLatestReleaseInfo() -> tuple[str, str | None]:
         case "darwin":
             assetNamePart = "MacOS"
         case "win32":
-            assetNamePart = "Windows"
+            assetNamePart = "Windows-Installer"
+        case "linux":
+            assetNamePart = "Linux"
 
     if assetNamePart is None:
         return latestVersion, None
@@ -467,6 +489,12 @@ def exportFontToPath(sourcePath, destPath, fileExtension, logFilePath):
 async def exportFontToPathAsync(sourcePath, destPath, fileExtension):
     sourcePath = pathlib.Path(sourcePath)
     destPath = pathlib.Path(destPath)
+    if fileExtension == "woff2":
+        with tempfile.TemporaryDirectory() as tmpDir:
+            tmpTtfPath = pathlib.Path(tmpDir) / (destPath.stem + ".ttf")
+            await exportFontToPathAsync(sourcePath, tmpTtfPath, "ttf")
+            woff2Compress(str(tmpTtfPath), str(destPath))
+        return
 
     sourceBackend = getFileSystemBackend(sourcePath)
 
@@ -530,11 +558,15 @@ def openFile(path, port):
         del parts[0]
     path = "/".join(quote(part, safe="") for part in parts)
 
+    readOnly = applicationSettings.value("openFontsInReadOnlyMode", False, type=bool)
     sampleText = applicationSettings.value("editorSampleText", "")
     urlFragment = dumpURLFragment({"text": sampleText}) if sampleText else ""
     view = "editor" if sampleText else "fontoverview"
 
-    webbrowser.open(f"http://localhost:{port}/{view}.html?project={path}{urlFragment}")
+    readOnlyStr = "&read-only=true" if readOnly else ""
+    webbrowser.open(
+        f"http://localhost:{port}/{view}.html?project={path}{readOnlyStr}{urlFragment}"
+    )
 
 
 def showMessageDialog(
@@ -650,6 +682,8 @@ def queueGetter(queue, callback):
 
 
 def main():
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+
     queue = multiprocessing.Queue()
     host = "localhost"
     port = findFreeTCPPort(host=host)
