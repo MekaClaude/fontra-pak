@@ -15,9 +15,11 @@ from pathlib import Path
 def run_command(cmd, cwd=None, description=""):
     """Run a command and check for errors"""
     print(f"{description}...")
-    result = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True)
+    use_shell = isinstance(cmd, str)
+    result = subprocess.run(cmd, shell=use_shell, cwd=cwd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"Command failed: {cmd}")
+        cmd_str = cmd if isinstance(cmd, str) else ' '.join(cmd)
+        print(f"Command failed: {cmd_str}")
         print("STDOUT:", result.stdout)
         print("STDERR:", result.stderr)
         sys.exit(1)
@@ -44,31 +46,36 @@ def update_version_info(version):
     # Numeric version tuple
     year, month, day, hour = version.split('.')
     numeric_version = f"({year}, {int(month)}, {int(day)}, {int(hour)})"
+    version_str = f"{year}.{int(month)}.{int(day)}.{int(hour)}"
 
-    # Read current content
+    import re
+
     content = version_info_path.read_text(encoding='utf-8')
 
-    # Update numeric versions
-    content = content.replace(
-        "filevers=(2026, 3, 18, 17),",
-        f"filevers={numeric_version},"
+    # Update numeric versions dynamically
+    content = re.sub(
+        r'filevers=\(\d+,\s*\d+,\s*\d+,\s*\d+\),',
+        f'filevers={numeric_version},',
+        content
     )
-    content = content.replace(
-        "prodvers=(2026, 3, 18, 17),",
-        f"prodvers={numeric_version},"
-    )
-
-    # Update string versions
-    content = content.replace(
-        "StringStruct(u'FileVersion', u'2026.3.18.17'),",
-        f"StringStruct(u'FileVersion', u'{version}'),"
-    )
-    content = content.replace(
-        "StringStruct(u'ProductVersion', u'2026.3.18.17')])",
-        f"StringStruct(u'ProductVersion', u'{version}')])"
+    content = re.sub(
+        r'prodvers=\(\d+,\s*\d+,\s*\d+,\s*\d+\),',
+        f'prodvers={numeric_version},',
+        content
     )
 
-    # Write back
+    # Update string versions dynamically
+    content = re.sub(
+        r"StringStruct\(u'FileVersion',\s*u'[\d.]+'\),",
+        f"StringStruct(u'FileVersion', u'{version_str}'),",
+        content
+    )
+    content = re.sub(
+        r"StringStruct\(u'ProductVersion',\s*u'[\d.]+'\)\]\)",
+        f"StringStruct(u'ProductVersion', u'{version_str}')])",
+        content
+    )
+
     version_info_path.write_text(content, encoding='utf-8')
     print(f"Updated version-info.txt to version {version}")
 
@@ -76,20 +83,26 @@ def update_fontra_version(version):
     """Update src/fontra/_version.py"""
     version_py_path = Path("../src/fontra/_version.py")
 
-    # Read current content
+    import re
+
     content = version_py_path.read_text(encoding='utf-8')
 
-    # Update version string
-    lines = content.split('\n')
-    for i, line in enumerate(lines):
-        if line.startswith("__version__ = version = "):
-            lines[i] = f"__version__ = version = '{version}'"
-        elif line.startswith("__version_tuple__ = version_tuple = "):
-            year, month, day, hour = version.split('.')
-            lines[i] = f"__version_tuple__ = version_tuple = ({year}, {int(month)}, {int(day)}, {int(hour)})"
+    year, month, day, hour = version.split('.')
+    version_str = f"{year}.{int(month):02d}.{int(day):02d}.{int(hour):02d}"
+    version_tuple = f"({int(year)}, {int(month)}, {int(day)}, {int(hour)})"
 
-    # Write back
-    version_py_path.write_text('\n'.join(lines), encoding='utf-8')
+    content = re.sub(
+        r"__version__ = version = '[\d.]+'",
+        f"__version__ = version = '{version_str}'",
+        content
+    )
+    content = re.sub(
+        r"__version_tuple__ = version_tuple = \([\d, ]+\)",
+        f"__version_tuple__ = version_tuple = {version_tuple}",
+        content
+    )
+
+    version_py_path.write_text(content, encoding='utf-8')
     print(f"Updated src/fontra/_version.py to version {version}")
 
 def build_executable():
@@ -144,12 +157,16 @@ def main():
 
     # Install dependencies
     run_command(
-        f"{sys.executable} -m pip install -r requirements.txt",
+        [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
         description="Installing dependencies"
     )
     run_command(
-        f"{sys.executable} -m pip install -r requirements-dev.txt",
+        [sys.executable, "-m", "pip", "install", "-r", "requirements-dev.txt"],
         description="Installing dev dependencies"
+    )
+    run_command(
+        [sys.executable, "-m", "pip", "install", "-e", ".."],
+        description="Installing local fontra package"
     )
 
     # Build client bundle

@@ -2,6 +2,7 @@ fontmake>=3.8.0
 fonttools[ufo,unicode,woff]>=4.40
 uharfbuzz>=0.23.0
 ufo2ft>=3.7.0
+fontra-compile @ git+https://github.com/fontra/fontra-compile.git
 aiohttp==3.14.1
 setuptools==82.0.1
 PyQt6==6.7.1
