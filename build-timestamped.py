@@ -35,8 +35,12 @@ def check_python():
     print(result.stdout.strip())
 
 def get_timestamp_version():
-    """Get version string in format YYYY.MM.DD.HH"""
-    now = datetime.now()
+    """Get version string in format YYYY.MM.DD.HH (GMT+1 / Europe/Paris)"""
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Europe/Paris"))
+    except Exception:
+        now = datetime.now()
     return f"{now.year}.{now.month:02d}.{now.day:02d}.{now.hour:02d}"
 
 def update_version_info(version):
@@ -88,16 +92,16 @@ def update_fontra_version(version):
     content = version_py_path.read_text(encoding='utf-8')
 
     year, month, day, hour = version.split('.')
-    version_str = f"{year}.{int(month):02d}.{int(day):02d}.{int(hour):02d}"
+    version_str = f"{int(year)}.{int(month)}.{int(day)}.{int(hour)}"
     version_tuple = f"({int(year)}, {int(month)}, {int(day)}, {int(hour)})"
 
     content = re.sub(
-        r"__version__ = version = '[\d.]+'",
+        r"__version__ = version = '[^']*'",
         f"__version__ = version = '{version_str}'",
         content
     )
     content = re.sub(
-        r"__version_tuple__ = version_tuple = \([\d, ]+\)",
+        r"__version_tuple__ = version_tuple = \([^)]*\)",
         f"__version_tuple__ = version_tuple = {version_tuple}",
         content
     )
@@ -151,11 +155,10 @@ def main():
     version = get_timestamp_version()
     print(f"Building version: {version}")
 
-    # Update version files
-    update_version_info(version)
-    update_fontra_version(version)
-
-    # Install dependencies
+    # Install dependencies FIRST, before stamping the version.
+    # `pip install -e ..` triggers vcs-versioning which regenerates
+    # src/fontra/_version.py; stamping must happen afterwards so the
+    # built executable reports the timestamped version.
     run_command(
         [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
         description="Installing dependencies"
@@ -180,6 +183,10 @@ def main():
         cwd="..",
         description="Building Fontra client bundle"
     )
+
+    # Update version files (after install, so vcs-versioning doesn't overwrite)
+    update_version_info(version)
+    update_fontra_version(version)
 
     # Build executable
     build_executable()
