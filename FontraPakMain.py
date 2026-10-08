@@ -23,14 +23,15 @@ import psutil
 from fontra import __version__ as fontraVersion
 from fontra.backends import getFileSystemBackend, newFileSystemBackend
 from fontra.backends.copy import copyFont
-from fontra.backends.populate import populateBackend
+from fontra.backends.populate import createNewFontAndPopulate
 from fontra.core.classes import DiscreteFontAxis
 from fontra.core.server import FontraServer, findFreeTCPPort
 from fontra.core.urlfragment import dumpURLFragment
-from fontra.filesystem.projectmanager import FileSystemProjectManager
+from fontra.filesystem.projectmanager import FileSystemProjectManager, fileExtensions
 from fontTools.ttLib.woff2 import compress as woff2Compress
 from PyQt6.QtCore import (
     QEvent,
+    QFileInfo,
     QObject,
     QPoint,
     QSettings,
@@ -39,11 +40,15 @@ from PyQt6.QtCore import (
     QTimer,
     pyqtSignal,
 )
+from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QDialog,
     QFileDialog,
+    QFileIconProvider,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -80,14 +85,17 @@ border: 5px solid gray;
 mainText = """
 <span style="font-size: 40px;">Drop font files here</span>
 <br>
+or double-click to browse
 <br>
-Your fonts will stay on your computer and will not be uploaded anywhere.
+<br>
+Your fonts stay on your computer and are never uploaded anywhere.
 <br>
 <br>
-Fontra Pak reads and writes .ufo, .designspace, .fontra, and .rcjk, and has
-partial support for reading and writing .glyphs and .glyphspackage files.
+<b>Read and write:</b> .ufo, .designspace, .fontra, .rcjk
 <br>
-Additionally, it can read (but not write) .ttf, .otf, .woff, .woff2, and .ttx.
+<b>Partial read and write:</b> .glyphs, .glyphspackage
+<br>
+<b>Read only:</b> .ttf, .otf, .woff, .woff2, .ttx
 """
 
 fileTypes = [
@@ -119,7 +127,34 @@ exportFileTypesMapping = {
 
 exportExtensionMapping = {v: k for k, v in exportFileTypesMapping.items()}
 
+openFontFilter = f"Fonts ({' '.join(f'*{ext}' for ext in sorted(fileExtensions))})"
+
 latestReleasePageURL = "https://github.com/fontra/fontra-pak/releases/latest"
+
+
+def runningAsFlatpak() -> bool:
+    # Every Flatpak sandbox bind-mounts this file in, regardless of app ID.
+    # More reliable than checking the FLATPAK_ID env var, which can be unset.
+    return os.path.exists("/.flatpak-info")
+
+
+def openURL(url):
+    if sys.platform != "linux":
+        return webbrowser.open(url)
+
+    # PyInstaller points these at the bundle; xdg-open & co must not see them.
+    names = ("LD_LIBRARY_PATH", "QT_PLUGIN_PATH", "QML2_IMPORT_PATH")
+    saved = {name: os.environ.pop(name, None) for name in names}
+    if saved["LD_LIBRARY_PATH"] is not None and "LD_LIBRARY_PATH_ORIG" in os.environ:
+        os.environ["LD_LIBRARY_PATH"] = os.environ["LD_LIBRARY_PATH_ORIG"]
+    try:
+        return webbrowser.open(url)
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 applicationSettings = QSettings("xyz.fontra", "FontraPak")
@@ -148,11 +183,88 @@ def getFontPath(path, fileType, mapping):
     return path
 
 
+def isFontPath(path):
+    path = pathlib.Path(path)
+    return path.suffix.lower() in fileExtensions and path.exists()
+
+
+def isFontFolder(info):
+    return info.isDir() and isFontPath(info.filePath())
+
+
+class FontFolderIconProvider(QFileIconProvider):
+    """Show font folders as documents rather than as folders"""
+
+    def icon(self, info):
+        if isinstance(info, QFileInfo) and isFontFolder(info):
+            info = QFileIconProvider.IconType.File
+        return super().icon(info)
+
+    def type(self, info):
+        return "Font Folder" if isFontFolder(info) else super().type(info)
+
+
+class OpenFontDialog(QFileDialog):
+    # Must outlive the file system models of all Open dialogs
+    fontFolderIconProvider = FontFolderIconProvider()
+
+    def __init__(self, parent, folder):
+        super().__init__(parent, "Open Font...", folder, openFontFilter)
+        if sys.platform != "darwin":
+            # The native dialog on macOS can select files and folders. On other
+            # platforms, it can select either files or folders, but not both.
+            # So we use non-native dialog with a custom icon provider and
+            # handle directoryEntered ourselves.
+            self.setOption(QFileDialog.Option.DontUseNativeDialog)
+            self.setFileMode(QFileDialog.FileMode.ExistingFile)
+            self.setIconProvider(self.fontFolderIconProvider)
+            self.directoryEntered.connect(self.folderWasEntered)
+        self.setOption(QFileDialog.Option.ReadOnly)
+        self.fontPaths = []
+
+    def accept(self):
+        paths = self.selectedFiles()
+        missing = not all(os.path.exists(p) for p in paths)
+        onlyFolders = all(os.path.isdir(p) and not isFontPath(p) for p in paths)
+        if sys.platform != "darwin" and (missing or onlyFolders):
+            super().accept()
+        else:
+            self.acceptPaths(paths)
+
+    def folderWasEntered(self, path):
+        if isFontPath(path):
+            self.acceptPaths([path])
+
+    def acceptPaths(self, paths):
+        self.fontPaths = paths
+        self.done(QDialog.DialogCode.Accepted)
+
+
+class DropAreaLabel(QLabel):
+    doubleClicked = pyqtSignal()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.doubleClicked.emit()
+        super().mouseDoubleClickEvent(event)
+
+
 class FontraMainWidget(QMainWindow):
     def __init__(self, port):
         super().__init__()
         self.port = port
         self.openProjects = set()
+
+        menuBar = self.menuBar()
+        actionNew = QAction("&New Font...", self)
+        actionNew.setShortcut(QKeySequence("Ctrl+N"))
+        actionNew.triggered.connect(self.newFont)
+        actionOpen = QAction("&Open Font...", self)
+        actionOpen.setShortcut(QKeySequence("Ctrl+O"))
+        actionOpen.triggered.connect(self.openFont)
+        fileMenu = menuBar.addMenu("&File")
+        fileMenu.addAction(actionNew)
+        fileMenu.addAction(actionOpen)
 
         self.setWindowTitle("Fontra Pak")
         self.resize(720, 480)
@@ -162,7 +274,8 @@ class FontraMainWidget(QMainWindow):
 
         self.setAcceptDrops(True)
 
-        self.label = QLabel(mainText)
+        self.label = DropAreaLabel(mainText)
+        self.label.doubleClicked.connect(self.openFont)
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setStyleSheet(neutralCSS)
         self.label.setSizePolicy(
@@ -173,16 +286,24 @@ class FontraMainWidget(QMainWindow):
         # Helpful: https://www.pythontutorial.net/pyqt/pyqt-qgridlayout/
         layout = QGridLayout()
 
-        button = QPushButton("&New Font...", self)
-        button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        button.clicked.connect(self.newFont)
+        buttonNew = QPushButton("&New Font...", self)
+        buttonNew.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        buttonNew.clicked.connect(self.newFont)
+
+        buttonOpen = QPushButton("&Open Font...", self)
+        buttonOpen.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        buttonOpen.clicked.connect(self.openFont)
+
+        buttonsLayout = QHBoxLayout()
+        buttonsLayout.addWidget(buttonNew)
+        buttonsLayout.addWidget(buttonOpen)
 
         buttonDocs = QPushButton("Documentation", self)
         buttonDocs.setToolTip("Open documentation website")
         buttonDocs.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        buttonDocs.clicked.connect(lambda: webbrowser.open("https://docs.fontra.xyz"))
+        buttonDocs.clicked.connect(lambda: openURL("https://docs.fontra.xyz"))
 
-        layout.addWidget(button, 0, 0, alignment=Qt.AlignmentFlag.AlignLeft)
+        layout.addLayout(buttonsLayout, 0, 0, alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(buttonDocs, 0, 1, alignment=Qt.AlignmentFlag.AlignRight)
 
         layout.addWidget(self.label, 1, 0, 1, 2)
@@ -217,7 +338,7 @@ class FontraMainWidget(QMainWindow):
 
         layout.addWidget(QLabel(f"Fontra version {fontraVersion}"), 5, 0)
 
-        if sys.platform in {"darwin", "win32", "linux"}:
+        if sys.platform in {"darwin", "win32", "linux"} and not runningAsFlatpak():
             self.downloadButton = QPushButton("Download latest Fontra Pak", self)
             self.downloadButton.setSizePolicy(
                 QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
@@ -294,12 +415,31 @@ class FontraMainWidget(QMainWindow):
 
         # Create a new empty project on disk
         try:
-            asyncio.run(createNewFont(fontPath))
+            asyncio.run(createNewFontAndPopulate(fontPath))
         except Exception as e:
             showMessageDialog("The new font could not be saved", repr(e))
             return
 
         if os.path.exists(fontPath):
+            openFile(fontPath, self.port)
+
+    def openFont(self):
+        dialog = OpenFontDialog(self, self.activeFolder)
+        paths = dialog.fontPaths if dialog.exec() else []
+
+        fontPaths = [pathlib.Path(p) for p in paths if isFontPath(p)]
+        notFonts = [f"“{pathlib.Path(p).name}”" for p in paths if not isFontPath(p)]
+
+        if notFonts:
+            showMessageDialog(
+                "Cannot open " + ", ".join(notFonts),
+                "Not a font, or not a supported font format",
+            )
+
+        if fontPaths:
+            applicationSettings.setValue("activeFolder", str(fontPaths[0].parent))
+
+        for fontPath in fontPaths:
             openFile(fontPath, self.port)
 
     def messageFromServer(self, item):
@@ -438,7 +578,7 @@ class FontraMainWidget(QMainWindow):
         if downloadURL is None:
             downloadURL = latestReleasePageURL
 
-        webbrowser.open(downloadURL)
+        openURL(downloadURL)
 
 
 def fetchLatestReleaseInfo() -> tuple[str, str | None]:
@@ -464,16 +604,16 @@ def _fetchLatestReleaseInfo() -> tuple[str, str | None]:
         case "win32":
             assetNamePart = "Windows-Installer"
         case "linux":
-            assetNamePart = "Linux"
+            assetNamePart = "Ubuntu"
 
     if assetNamePart is None:
         return latestVersion, None
 
-    [assetInfo] = [
+    assetInfos = [
         asset for asset in latestRelease["assets"] if assetNamePart in asset["name"]
     ]
 
-    return latestVersion, assetInfo["browser_download_url"]
+    return latestVersion, assetInfos[0]["browser_download_url"] if assetInfos else None
 
 
 def exportFontToPath(sourcePath, destPath, fileExtension, logFilePath):
@@ -542,13 +682,6 @@ async def exportFontToPathAsync(sourcePath, destPath, fileExtension):
             await copyFont(sourceBackend, destBackend)
 
 
-async def createNewFont(fontPath):
-    # Create a new empty project on disk
-    destBackend = newFileSystemBackend(fontPath)
-    await populateBackend(destBackend)
-    await destBackend.aclose()
-
-
 def openFile(path, port):
     path = pathlib.Path(path).resolve()
     assert path.is_absolute()
@@ -564,7 +697,7 @@ def openFile(path, port):
     view = "editor" if sampleText else "fontoverview"
 
     readOnlyStr = "&read-only=true" if readOnly else ""
-    webbrowser.open(
+    openURL(
         f"http://localhost:{port}/{view}.html?project={path}{readOnlyStr}{urlFragment}"
     )
 

@@ -1,12 +1,14 @@
-fontmake>=3.8.0
-fonttools[ufo,unicode,woff]>=4.40
-uharfbuzz>=0.23.0
-ufo2ft>=3.7.0
-fontra-compile @ git+https://github.com/fontra/fontra-compile.git
+git+https://github.com/fontra/fontra.git
+git+https://github.com/fontra/fontra-compile.git
+git+https://github.com/fontra/fontra-rcjk.git
+git+https://github.com/fontra/fontra-glyphs.git
 aiohttp==3.14.3
-setuptools==82.0.1
-PyQt6==6.7.1
-PyQt6-Qt6==6.7.3
-PyQt6-sip==13.10.3
+setuptools==84.0.0
+PyQt6==6.7.1 ; sys_platform == "darwin"
+PyQt6==6.11.0 ; sys_platform != "darwin"
+PyQt6-Qt6==6.7.3 ; sys_platform == "darwin"
+PyQt6-Qt6==6.11.2 ; sys_platform != "darwin"
+PyQt6-sip==13.10.3 ; sys_platform == "darwin"
+PyQt6-sip==13.12.0 ; sys_platform != "darwin"
 psutil==7.2.2
-certifi==2026.5.20
+certifi==2026.7.22
