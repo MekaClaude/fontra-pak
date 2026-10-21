@@ -2,6 +2,58 @@
 import sys
 from importlib.metadata import PackageNotFoundError
 from PyInstaller.utils.hooks import collect_all, copy_metadata
+from fontra import __version__ as fontraVersion
+
+
+def buildWindowsVersionResource():
+    from PyInstaller.utils.win32.versioninfo import (
+        VSVersionInfo,
+        FixedFileInfo,
+        StringFileInfo,
+        StringTable,
+        StringStruct,
+        VarFileInfo,
+        VarStruct,
+    )
+
+    y, m, patch, *extra = fontraVersion.split(".", maxsplit=3)
+    y, m, patch = [int(v) for v in (y, m, patch)]
+
+    return VSVersionInfo(
+        ffi=FixedFileInfo(
+            filevers=(y, m, patch, 0),
+            prodvers=(y, m, patch, 0),
+            mask=0x3F,
+            flags=0x0,
+            OS=0x4,
+            fileType=0x1,
+            subtype=0x0,
+            date=(0, 0),
+        ),
+        kids=[
+            StringFileInfo(
+                [
+                    StringTable(
+                        "040904B0",
+                        [
+                            StringStruct("CompanyName", "Fontra.xyz"),
+                            StringStruct("FileDescription", "Fontra Pak"),
+                            StringStruct("FileVersion", fontraVersion),
+                            StringStruct("InternalName", "Fontra Pak"),
+                            StringStruct(
+                                "LegalCopyright", "© Google LLC, Just van Rossum"
+                            ),
+                            StringStruct("OriginalFilename", "Fontra Pak.exe"),
+                            StringStruct("ProductName", "Fontra Pak"),
+                            StringStruct("ProductVersion", fontraVersion),
+                        ],
+                    )
+                ]
+            ),
+            VarFileInfo([VarStruct("Translation", [1033, 1200])]),
+        ],
+    )
+
 
 datas = []
 binaries = []
@@ -61,7 +113,7 @@ if sys.platform == "darwin":
         console=False,
         disable_windowed_traceback=False,
         argv_emulation=False,
-        target_arch=None,
+        target_arch="universal2",
         codesign_identity=None,
         entitlements_file=None,
         icon="icon/FontraIcon.ico",
@@ -81,12 +133,16 @@ if sys.platform == "darwin":
         name="Fontra Pak.app",
         icon="icon/FontraIcon.icns",
         bundle_identifier="xyz.fontra.fontra-pak",
+        version=fontraVersion,
         info_plist={
             "CFBundleDocumentTypes": [
                 dict(
                     CFBundleTypeExtensions=[
                         "ttf",
                         "otf",
+                        "woff",
+                        "woff2",
+                        "ttx",
                         "designspace",
                         "glyphs",
                         "yaml",
@@ -114,7 +170,7 @@ else:
         a.zipfiles,
         a.datas,
         [],
-        name="Fontra Pak",
+        name="Fontra Pak" if sys.platform == "win32" else "fontrapak",
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
@@ -128,5 +184,5 @@ else:
         codesign_identity=None,
         entitlements_file=None,
         icon="icon/FontraIcon.ico",
-        version="version-info.txt",
+        version=buildWindowsVersionResource() if sys.platform == "win32" else None,
     )

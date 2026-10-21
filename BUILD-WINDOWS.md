@@ -1,175 +1,85 @@
 # Fontra Pak Windows Build
 
-## Latest Release
-
-**Version:** 2026.3.3.0  
-**Build Date:** 2026-03-16  
-**Output:** `dist/Fontra-Pak-v2026.3.3.0/Fontra Pak.exe` (53.5 MB)
-
----
-
-## Build Summary
-
-Fontra Pak is a standalone Windows application for viewing and editing font files. It bundles:
-- Fontra server (Python)
-- Fontra client (JavaScript/HTML)
-- PyQt6 for native Windows UI
-- All required dependencies
-
-### Versioned Builds
-
-Starting with v2026.3.3.0, builds are organized in versioned folders:
+This file documents the **Windows** build of Fontra Pak. The full procedure,
+including the version convention and the troubleshooting notes, lives in the
+fork's skill doc:
 
 ```
-dist/
-├── Fontra Pak.exe              # Latest build (overwritten on each build)
-└── Fontra-Pak-v2026.3.3.0/     # Versioned folder (preserved)
-    └── Fontra Pak.exe
+../.skills-data-prompt/build-fontra-windows-skill.md
 ```
 
-This allows:
-- Multiple versions to coexist
-- Easy rollback to previous versions
-- Clear version tracking for releases
+## One command
 
-## What Was Done
+```bash
+cd fontra-pak
+python build-timestamped.py
+```
 
-### 1. Icon Update
-- Created new Fontra icon from SVG source file
-- Converted SVG to Windows ICO format with multiple sizes (16x16 to 512x512)
-- Icon features the new stylized "F" logo in pink (RGB: 255, 0, 92)
+The script:
 
-**Files Modified:**
-- `icon/fontra-icon-source.svg` - Source SVG file
-- `icon/FontraIcon.ico` - Windows icon file (generated)
+1. installs `requirements.txt` and `requirements-dev.txt`;
+2. installs the parent Fontra package in editable mode (`pip install -e ..`);
+3. builds the client bundle (`npm install && npm run bundle` in the parent);
+4. stamps the timestamped version into `../src/fontra/_version.py`;
+5. verifies that the installed `fontra.__version__` reports that version;
+6. runs PyInstaller on `FontraPak.spec`;
+7. copies the executable to `dist/Fontra-Pak-v{VERSION}/Fontra Pak.exe`.
 
-### 2. Build Process
-The Windows executable was built using PyInstaller with the following steps:
+The version format is `YYYY.MM.DD.HH` in the GMT+1 (Europe/Paris) timezone.
 
-1. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   pip install -r requirements-dev.txt
-   ```
+## How the version reaches the executable
 
-2. **Build Fontra client bundle:**
-   ```bash
-   cd ..
-   npm install
-   npm run bundle
-   ```
+`FontraPak.spec` builds the Windows version resource from the installed
+package:
 
-3. **Build Windows executable:**
-   ```bash
-   pyinstaller FontraPak.spec --clean
-   ```
+```python
+from fontra import __version__ as fontraVersion
+...
+version=buildWindowsVersionResource() if sys.platform == "win32" else None,
+```
 
-### 3. Icon Conversion Script
-Created `scripts/convert-icons-simple.py` for converting the SVG icon to ICO format.
+So there is exactly **one** version to set: `../src/fontra/_version.py`.
+Step 4 of the build script writes it, and step 5 checks that the editable
+install really reports it — that is what guarantees the `.exe` shows the
+right version in Explorer's file properties.
 
-**Usage:**
+> Do not re-introduce a separate `version-info.txt`: the upstream spec
+> derives the version resource from `fontra.__version__`, and keeping a
+> second source of truth is what used to drift out of sync.
+
+## Icon
+
+`icon/FontraIcon.ico` is the Windows icon. To regenerate it from the SVG
+source:
+
 ```bash
 python scripts/convert-icons-simple.py
 ```
 
-This creates `icon/FontraIcon.ico` with all required sizes for Windows.
+`icon/fontra-icon-source.svg` is the source of truth for the icon.
 
-## Build Script
+## Verify the build
 
-A batch file `build-windows.bat` has been created to automate the entire build process:
-
-```batch
-build-windows.bat
-```
-
-This script:
-1. Verifies Python installation
-2. Installs dependencies
-3. Builds the Fontra client bundle
-4. Runs PyInstaller to create the Windows executable
-
-## Output
-
-**Executable:** `dist/Fontra Pak.exe`
-- Size: 53.5 MB
-- Includes all Python dependencies
-- Bundled Fontra client (JavaScript/HTML)
-- PyQt6 for native Windows UI
-- New Fontra icon embedded
-
-## Testing the Build
-
-After building, you can test the executable by:
-
-1. Double-clicking `dist/Fontra Pak.exe`
-2. Dropping a font file (.designspace, .ufo, .ttf, .otf, .fontra) onto the application
-3. The font should open in your default browser
-
-## Creating an Installer (Optional)
-
-To create a proper Windows installer, you can use:
-
-### Inno Setup
-1. Download Inno Setup from https://jrsoftware.org/isdl.php
-2. Create a `.iss` script:
-   ```iss
-   [Setup]
-   AppName=Fontra Pak
-   AppVersion=1.0.0
-   DefaultDirName={autopf}\Fontra Pak
-   OutputDir=installer-output
-   [Files]
-   Source: "dist\Fontra Pak.exe"; DestDir: "{app}"
-   [Icons]
-   Name: "{group}\Fontra Pak"; Filename: "{app}\Fontra Pak.exe"
-   ```
-3. Compile with Inno Setup Compiler
-
-### NSIS
-Alternatively, use NSIS for more advanced installer features.
-
-## Notes
-
-- The build includes the new Fontra icon which will appear in:
-  - Windows taskbar
-  - Alt+Tab switcher
-  - File Explorer (when associated with font files)
-  - Application window title bar
-
-- The icon ICO file contains multiple sizes for optimal display at different DPI settings
-
-## Troubleshooting
-
-### Build fails with "Module not found"
-Ensure all dependencies are installed:
 ```bash
-pip install -r requirements-dev.txt
+python test-export.py
 ```
 
-### Icon not showing
-Verify the icon file exists and is valid:
-```bash
-python scripts/convert-icons-simple.py
-```
+Expected: `Passed: 7, Failed: 0`.
 
-### Executable too large
-This is normal - PyInstaller bundles Python and all dependencies. The size can be reduced slightly with UPX compression (already enabled in the spec file).
+## Keeping this in sync with upstream
 
-## Next Steps
+`fontra-pak` is a fork of `https://github.com/fontra/fontra-pak`. This
+repository deliberately keeps a few **additive** files that upstream does not
+have, because they serve the Windows build:
 
-1. **Code Signing** (recommended for distribution):
-   - Obtain a code signing certificate
-   - Sign the executable: `signtool sign /f certificate.pfx /t http://timestamp.digicert.com "dist\Fontra Pak.exe"`
+| File | Why it stays |
+|---|---|
+| `build-timestamped.py` | the one-command, timestamped Windows build |
+| `test-export.py` | the export smoke test |
+| `hook-fontra.backends.py`, `hook-fontra_compile.py` | PyInstaller hooks (auto-discovered) |
+| `scripts/convert-icons*.py`, `icon/fontra-icon-source.svg` | the icon toolchain |
+| `requirements-dev.txt` | `delocate` stays commented out: it is macOS-only |
 
-2. **Create Installer** (see above)
-
-3. **Test on clean Windows installation** to ensure all dependencies are bundled correctly
-
-4. **Release to GitHub**:
-   - Create a new release on GitHub
-   - Upload the executable or installer
-   - Include release notes
-
----
-
-**Build completed successfully! ✅**
+Everything else is taken from upstream verbatim. When merging upstream, keep
+these files and take upstream's version of the rest — in particular
+`FontraPak.spec`, which upstream owns.

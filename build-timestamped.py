@@ -43,45 +43,43 @@ def get_timestamp_version():
         now = datetime.now()
     return f"{now.year}.{now.month:02d}.{now.day:02d}.{now.hour:02d}"
 
-def update_version_info(version):
-    """Update version-info.txt with the new version"""
-    version_info_path = Path("version-info.txt")
+def verify_fontra_version(version):
+    """Check that the installed fontra package reports the stamped version.
 
-    # Numeric version tuple
-    year, month, day, hour = version.split('.')
-    numeric_version = f"({year}, {int(month)}, {int(day)}, {int(hour)})"
-    version_str = f"{year}.{int(month)}.{int(day)}.{int(hour)}"
-
+    FontraPak.spec builds the Windows version resource from
+    `fontra.__version__`, so the exe only carries the right version if the
+    *installed* fontra package picks up the stamped `src/fontra/_version.py`.
+    With an editable install that is the case, but it is worth checking: a
+    stale or non-editable install would silently produce an exe with the
+    wrong version (or a spec that cannot parse the version at all).
+    """
     import re
 
-    content = version_info_path.read_text(encoding='utf-8')
+    if not re.fullmatch(r"\d+\.\d+\.\d+(\.\d+)?", version):
+        raise SystemExit(
+            f"ERROR: the generated version {version!r} is not in the "
+            f"YYYY.MM.DD.HH format that FontraPak.spec expects."
+        )
 
-    # Update numeric versions dynamically
-    content = re.sub(
-        r'filevers=\(\d+,\s*\d+,\s*\d+,\s*\d+\),',
-        f'filevers={numeric_version},',
-        content
-    )
-    content = re.sub(
-        r'prodvers=\(\d+,\s*\d+,\s*\d+,\s*\d+\),',
-        f'prodvers={numeric_version},',
-        content
-    )
+    try:
+        import fontra
+    except ImportError:
+        print(
+            "WARNING: the fontra package is not importable, so the version "
+            "cannot be verified."
+        )
+        return
 
-    # Update string versions dynamically
-    content = re.sub(
-        r"StringStruct\(u'FileVersion',\s*u'[\d.]+'\),",
-        f"StringStruct(u'FileVersion', u'{version_str}'),",
-        content
-    )
-    content = re.sub(
-        r"StringStruct\(u'ProductVersion',\s*u'[\d.]+'\)\]\)",
-        f"StringStruct(u'ProductVersion', u'{version_str}')])",
-        content
-    )
-
-    version_info_path.write_text(content, encoding='utf-8')
-    print(f"Updated version-info.txt to version {version}")
+    installed = getattr(fontra, "__version__", None)
+    if installed != version:
+        raise SystemExit(
+            f"ERROR: fontra.__version__ is {installed!r}, but the build "
+            f"stamped {version!r}.\n"
+            f"       fontra is imported from: {getattr(fontra, '__file__', '?')}\n"
+            f"       Install it in editable mode from the checkout: "
+            f"pip install -e .."
+        )
+    print(f"fontra.__version__ is {installed} ({fontra.__file__})")
 
 def update_fontra_version(version):
     """Update src/fontra/_version.py"""
@@ -184,9 +182,12 @@ def main():
         description="Building Fontra client bundle"
     )
 
-    # Update version files (after install, so vcs-versioning doesn't overwrite)
-    update_version_info(version)
+    # Update the version (after install, so vcs-versioning doesn't overwrite),
+    # then check that the installed package reports it. FontraPak.spec builds
+    # the Windows version resource from `fontra.__version__`, so this check
+    # is what guarantees the exe carries the right version.
     update_fontra_version(version)
+    verify_fontra_version(version)
 
     # Build executable
     build_executable()
