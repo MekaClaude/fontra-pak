@@ -128,4 +128,5 @@ else:
         codesign_identity=None,
         entitlements_file=None,
         icon="icon/FontraIcon.ico",
+        version="version-info.txt",
     )
