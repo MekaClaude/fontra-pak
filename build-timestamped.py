@@ -90,7 +90,7 @@ def update_fontra_version(version):
     content = version_py_path.read_text(encoding='utf-8')
 
     year, month, day, hour = version.split('.')
-    version_str = f"{int(year)}.{int(month)}.{int(day)}.{int(hour)}"
+    version_str = f"{int(year)}.{int(month):02d}.{int(day):02d}.{int(hour):02d}"
     version_tuple = f"({int(year)}, {int(month)}, {int(day)}, {int(hour)})"
 
     content = re.sub(
