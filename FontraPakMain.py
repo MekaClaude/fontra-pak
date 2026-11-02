@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import multiprocessing
@@ -40,7 +41,8 @@ from PyQt6.QtCore import (
     QTimer,
     pyqtSignal,
 )
-from PyQt6.QtGui import QAction, QKeySequence
+from PyQt6.QtGui import QAction, QIcon, QKeySequence
+from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -130,6 +132,13 @@ exportExtensionMapping = {v: k for k, v in exportFileTypesMapping.items()}
 openFontFilter = f"Fonts ({' '.join(f'*{ext}' for ext in sorted(fileExtensions))})"
 
 latestReleasePageURL = "https://github.com/fontra/fontra-pak/releases/latest"
+
+
+def resourcePath(relativePath):
+    # sys._MEIPASS is set inside a PyInstaller bundle
+    base = getattr(sys, "_MEIPASS", None)
+    base = pathlib.Path(base) if base is not None else pathlib.Path(__file__).parent
+    return base / relativePath
 
 
 def runningAsFlatpak() -> bool:
@@ -821,6 +830,76 @@ def openPathsFromArguments(args, port):
             openFile(arg, port)
 
 
+def getSingleInstanceName():
+    # A different copy of the app (another install, a frozen build, a source
+    # checkout) gets its own name, so copies never hand files to each other.
+    appPath = sys.executable if getattr(sys, "frozen", False) else __file__
+    digest = hashlib.sha256(os.path.realpath(appPath).encode("utf-8")).hexdigest()
+    return f"xyz.fontra.FontraPak.{digest[:12]}"
+
+
+singleInstanceName = getSingleInstanceName()
+
+
+def getFontPathsFromArguments(args):
+    return [str(pathlib.Path(arg).resolve()) for arg in args if isFontPath(arg)]
+
+
+def connectToRunningInstance(paths):
+    """Return True if another instance of this app is running. Send it the
+    paths, if there are any."""
+    socket = QLocalSocket()
+    socket.connectToServer(singleInstanceName)
+    if not socket.waitForConnected(500):
+        return False
+    if paths:
+        socket.write(json.dumps(paths).encode("utf-8"))
+        socket.flush()
+        socket.waitForBytesWritten(1000)
+    socket.disconnectFromServer()
+    if socket.state() != QLocalSocket.LocalSocketState.UnconnectedState:
+        socket.waitForDisconnected(1000)
+    return True
+
+
+class SingleInstanceServer(QObject):
+    """Receive font paths from later launches of the app."""
+
+    def __init__(self, port):
+        super().__init__()
+        self.port = port
+        self.server = QLocalServer(self)
+        self.server.newConnection.connect(self.newConnection)
+        self.server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
+        # We only get here if no running instance answered, so an existing
+        # socket file is stale.
+        QLocalServer.removeServer(singleInstanceName)
+        if not self.server.listen(singleInstanceName):
+            print("single instance server failed:", self.server.errorString())
+
+    def newConnection(self):
+        socket = self.server.nextPendingConnection()
+        socket.disconnected.connect(socket.deleteLater)
+        socket.readyRead.connect(lambda: self.readPaths(socket))
+        if socket.bytesAvailable():
+            self.readPaths(socket)
+
+    def readPaths(self, socket):
+        data = bytes(socket.readAll())
+        if not data:
+            return
+        try:
+            paths = json.loads(data.decode("utf-8"))
+        except ValueError:
+            return
+        if not isinstance(paths, list):
+            return
+        socket.disconnectFromServer()
+        for path in paths:
+            if isinstance(path, str) and isFontPath(path):
+                openFile(path, self.port)
+
+
 def main():
     os.environ["SSL_CERT_FILE"] = certifi.where()
 
@@ -833,6 +912,20 @@ def main():
     serverProcess.start()
 
     app = FontraApplication(sys.argv, port)
+    app.setWindowIcon(QIcon(str(resourcePath("icon/FontraIcon.ico"))))
+
+    # macOS already hands files to the running instance itself
+    singleInstance = sys.platform != "darwin" and "--new-instance" not in sys.argv
+    paths = getFontPathsFromArguments(app.arguments()[1:])
+    instanceRunning = singleInstance and connectToRunningInstance(paths)
+
+    if instanceRunning and paths:
+        serverProcess.terminate()
+        serverProcess.join()
+        sys.exit(0)
+
+    if singleInstance and not instanceRunning:
+        singleInstanceServer = SingleInstanceServer(port)  # noqa: F841
 
     def cleanup():
         queue.put(None)

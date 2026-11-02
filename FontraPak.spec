@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+import shutil
 import sys
 from importlib.metadata import PackageNotFoundError
 from PyInstaller.utils.hooks import collect_all, copy_metadata
@@ -77,6 +78,13 @@ for module_name in modules_to_collect_all:
         datas += copy_metadata(module_name)
     except PackageNotFoundError:
         print("no metadata for", module_name)
+
+
+datas += [("icon/FontraIcon.ico", "icon")]
+
+binaries_to_add = ["sr-aef"]
+for binary_name in binaries_to_add:
+    binaries.append([shutil.which(binary_name), "."])
 
 
 block_cipher = None
