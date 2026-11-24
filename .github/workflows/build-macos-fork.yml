@@ -22,6 +22,8 @@ on:
 jobs:
   build-macos:
     runs-on: macos-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Git checkout (fontra-pak)
@@ -95,11 +97,12 @@ jobs:
           )
           path.write_text(text, encoding="utf-8")
           print("stamped", version)
+          with open("version.txt", "w", encoding="utf-8") as f:
+              f.write(version)
           EOF
 
       - name: Build app with PyInstaller
         run: pyinstaller FontraPak.spec -y
-
       - name: Check what the app contains
         run: |
           # The plug-ins of the fork must be inside the bundle, and the
@@ -123,3 +126,30 @@ jobs:
         with:
           name: FontraPak-MacOS-arm64
           path: ./dist/*.dmg
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The release is the permanent download page: the Actions artifact
+          # needs a login and disappears after ninety days.
+          VERSION="$(cat version.txt)"
+          TAG="v${VERSION}"
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Fontra Pak ${VERSION} (macOS arm64)" \
+              --notes "macOS disk image, universal2 (Apple Silicon and Intel).
+
+          Built from this fork: \`code-review-feedback-42427\`.
+
+          The image is **unsigned** and **not notarized**: the signing
+          certificate and the notarization credentials live in the upstream
+          repository, not in this fork. On the first launch, use
+          right-click → Open.
+
+          It installs on a Mac. A \`.dmg\` cannot be installed on a phone:
+          iPhone apps are \`.ipa\` and Android apps are \`.apk\`."
+          fi
+          gh release upload "$TAG" "dist/FontraPak-MacOS-arm64.dmg" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          echo "published: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
