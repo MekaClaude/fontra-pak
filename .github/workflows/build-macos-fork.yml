@@ -100,6 +100,19 @@ jobs:
       - name: Build app with PyInstaller
         run: pyinstaller FontraPak.spec -y
 
+      - name: Check what the app contains
+        run: |
+          # The plug-ins of the fork must be inside the bundle, and the
+          # client must be the bundle of the fork.
+          echo "--- plug-in manifests in the app ---"
+          find "dist/Fontra Pak.app" -name plugin.json | sort
+          echo "--- the course corpus ---"
+          find "dist/Fontra Pak.app" -name course.json -exec ls -la {} \;
+          echo "--- the client bundle ---"
+          find "dist/Fontra Pak.app" -name "fontra-core*.js" -exec ls -la {} \;
+          echo "--- the app identity ---"
+          plutil -p "dist/Fontra Pak.app/Contents/Info.plist" | head -20
+
       - name: Build the disk image
         run: |
           python macos/build_dmg.py "dist/Fontra Pak.app" "dist/FontraPak-MacOS-arm64.dmg"
