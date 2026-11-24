@@ -48,15 +48,54 @@ jobs:
 
       - name: Install dependencies
         run: |
+          set -o pipefail
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # Install the fontra of the fork instead of the upstream one, so
+          # that the app is the fork's. The wheel build hook of fontra runs
+          # `npm install` and `npm run bundle`, so the client bundle in the
+          # image is the one of this fork.
+          sed 's|git+https://github.com/fontra/fontra.git|./fontra|' requirements.txt > requirements-fork.txt
+          pip install -r requirements-fork.txt 2>&1 | tee pip_log.txt
           pip install -r requirements-dev.txt
 
-      - name: Install the fontra of the fork
-        # The wheel build hook of fontra runs `npm install` and
-        # `npm run bundle`, so the client bundle in the image is the one of
-        # this fork, not of upstream.
-        run: pip install ./fontra
+      - name: Make and install universal wheels
+        run: |
+          # FontraPak.spec builds a universal2 app, so every compiled
+          # dependency has to be a fat binary. The wheels that pip serves
+          # on an arm64 runner are arm64 only, so they are merged into
+          # universal2 wheels first.
+          pip install delocate
+          python macos/ensure_universal_wheels.py pip_log.txt
+          pip install --force build/universal_wheels/*.whl
+
+      - name: Stamp the version
+        run: |
+          python - <<'EOF'
+          import datetime
+          import pathlib
+          import re
+          import zoneinfo
+
+          import fontra
+
+          now = datetime.datetime.now(zoneinfo.ZoneInfo("Europe/Paris"))
+          version = f"{now.year}.{now.month:02d}.{now.day:02d}.{now.hour:02d}"
+          path = pathlib.Path(fontra.__file__).parent / "_version.py"
+          text = path.read_text(encoding="utf-8")
+          text = re.sub(
+              r"__version__ = version = '[^']*'",
+              f"__version__ = version = '{version}'",
+              text,
+          )
+          text = re.sub(
+              r"__version_tuple__ = version_tuple = \([^)]*\)",
+              f"__version_tuple__ = version_tuple = "
+              f"({now.year}, {now.month:02d}, {now.day:02d}, {now.hour:02d})",
+              text,
+          )
+          path.write_text(text, encoding="utf-8")
+          print("stamped", version)
+          EOF
 
       - name: Build app with PyInstaller
         run: pyinstaller FontraPak.spec -y
