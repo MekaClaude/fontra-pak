@@ -49,7 +49,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFileIconProvider,
-    QGridLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -58,47 +58,9 @@ from PyQt6.QtWidgets import (
     QProgressDialog,
     QPushButton,
     QSizePolicy,
+    QVBoxLayout,
     QWidget,
 )
-
-commonCSS = """
-border-radius: 20px;
-border-style: dashed;
-font-size: 18px;
-padding: 16px;
-"""
-
-neutralCSS = (
-    """
-background-color: rgba(255,255,255,128);
-border: 5px solid lightgray;
-"""
-    + commonCSS
-)
-
-droppingCSS = (
-    """
-background-color: rgba(255,255,255,64);
-border: 5px solid gray;
-"""
-    + commonCSS
-)
-
-mainText = """
-<span style="font-size: 40px;">Drop font files here</span>
-<br>
-or double-click to browse
-<br>
-<br>
-Your fonts stay on your computer and are never uploaded anywhere.
-<br>
-<br>
-<b>Read and write:</b> .ufo, .designspace, .fontra, .rcjk
-<br>
-<b>Partial read and write:</b> .glyphs, .glyphspackage
-<br>
-<b>Read only:</b> .ttf, .otf, .woff, .woff2, .ttx
-"""
 
 fileTypes = [
     # name, extension
@@ -131,6 +93,8 @@ exportExtensionMapping = {v: k for k, v in exportFileTypesMapping.items()}
 
 openFontFilter = f"Fonts ({' '.join(f'*{ext}' for ext in sorted(fileExtensions))})"
 
+changelogURL = "https://fontra.xyz/changelog.html"
+docsURL = "https://docs.fontra.xyz"
 latestReleasePageURL = "https://github.com/fontra/fontra-pak/releases/latest"
 
 
@@ -249,7 +213,7 @@ class OpenFontDialog(QFileDialog):
         self.done(QDialog.DialogCode.Accepted)
 
 
-class DropAreaLabel(QLabel):
+class DropAreaFrame(QFrame):
     doubleClicked = pyqtSignal()
 
     def mouseDoubleClickEvent(self, event):
@@ -257,43 +221,59 @@ class DropAreaLabel(QLabel):
             self.doubleClicked.emit()
         super().mouseDoubleClickEvent(event)
 
+    def setDropping(self, dropping):
+        self.setProperty("dropping", dropping)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
 
 class FontraMainWidget(QMainWindow):
     def __init__(self, port):
         super().__init__()
         self.port = port
         self.openProjects = set()
+        self.preferencesWindow = None
 
         menuBar = self.menuBar()
-        actionNew = QAction("&New Font...", self)
-        actionNew.setShortcut(QKeySequence("Ctrl+N"))
-        actionNew.triggered.connect(self.newFont)
-        actionOpen = QAction("&Open Font...", self)
-        actionOpen.setShortcut(QKeySequence("Ctrl+O"))
-        actionOpen.triggered.connect(self.openFont)
+
         fileMenu = menuBar.addMenu("&File")
-        fileMenu.addAction(actionNew)
-        fileMenu.addAction(actionOpen)
+        fileMenu.addAction("New Font...", QKeySequence.StandardKey.New, self.newFont)
+        fileMenu.addAction("Open Font...", QKeySequence.StandardKey.Open, self.openFont)
+        fileMenu.addSeparator()
+        fileMenu.addAction(
+            "Close",
+            QKeySequence.StandardKey.Close,
+            lambda: QApplication.focusWindow().close(),
+        )
+        fileMenu.addSeparator()
+        fileMenu.addAction(
+            "Preferences...", QKeySequence.StandardKey.Preferences, self.preferences
+        ).setMenuRole(QAction.MenuRole.PreferencesRole)
+        fileMenu.addSeparator()
+        fileMenu.addAction(
+            "Quit",
+            QKeySequence.StandardKey.Quit,
+            lambda: QApplication.instance().quit(),
+        ).setMenuRole(QAction.MenuRole.QuitRole)
+
+        helpMenu = menuBar.addMenu("&Help")
+        helpMenu.addAction("Documentation", lambda: openURL(docsURL))
+        helpMenu.addAction("Changelog", lambda: openURL(changelogURL))
+        helpMenu.addSeparator()
+        helpMenu.addAction("Download latest Fontra Pak", self.goToLatestDownload)
+        helpMenu.addAction("About Fontra Pak", self.aboutFontra).setMenuRole(
+            QAction.MenuRole.AboutRole
+        )
 
         self.setWindowTitle("Fontra Pak")
-        self.resize(720, 480)
 
         self.resize(applicationSettings.value("size", QSize(720, 480)))
         self.move(applicationSettings.value("pos", QPoint(50, 50)))
 
         self.setAcceptDrops(True)
 
-        self.label = DropAreaLabel(mainText)
-        self.label.doubleClicked.connect(self.openFont)
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setStyleSheet(neutralCSS)
-        self.label.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
-        self.label.setWordWrap(True)
-
-        # Helpful: https://www.pythontutorial.net/pyqt/pyqt-qgridlayout/
-        layout = QGridLayout()
+        layout = QVBoxLayout()
 
         buttonNew = QPushButton("&New Font...", self)
         buttonNew.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -306,16 +286,40 @@ class FontraMainWidget(QMainWindow):
         buttonsLayout = QHBoxLayout()
         buttonsLayout.addWidget(buttonNew)
         buttonsLayout.addWidget(buttonOpen)
+        buttonsLayout.addStretch()
 
-        buttonDocs = QPushButton("Documentation", self)
-        buttonDocs.setToolTip("Open documentation website")
-        buttonDocs.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        buttonDocs.clicked.connect(lambda: openURL("https://docs.fontra.xyz"))
+        if sys.platform in {"darwin", "win32", "linux"} and not runningAsFlatpak():
+            self.downloadButton = QPushButton("‼️ A new version is available ‼️", self)
+            self.downloadButton.setSizePolicy(
+                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+            )
+            self.downloadButton.clicked.connect(self.goToLatestDownload)
+            self.downloadButton.setVisible(False)
+            buttonsLayout.addWidget(self.downloadButton)
+            if "test-startup" not in sys.argv:
+                self.checkForUpdate(1500)
 
-        layout.addLayout(buttonsLayout, 0, 0, alignment=Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(buttonDocs, 0, 1, alignment=Qt.AlignmentFlag.AlignRight)
+        layout.addLayout(buttonsLayout)
 
-        layout.addWidget(self.label, 1, 0, 1, 2)
+        self.dropAreaFrame = DropAreaFrame()
+        self.dropAreaFrame.doubleClicked.connect(self.openFont)
+        dropAreaLayout = QVBoxLayout(self.dropAreaFrame)
+        dropAreaLayout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        dropAreaTexts = [
+            "Drop font files here",
+            "or double-click to browse",
+            "Your fonts stay on your computer\nand are never uploaded anywhere.",
+            "<b>Read and write:</b> .ufo, .designspace, .fontra, .rcjk<br>"
+            "<b>Partial read and write:</b> .glyphs, .glyphspackage<br>"
+            "<b>Read only:</b> .ttf, .otf, .woff, .woff2, .ttx",
+        ]
+        dropAreaTextsObjectNames = ["dropAreaTitle", "dropAreaSubtitle", None, None]
+        for text, name in zip(dropAreaTexts, dropAreaTextsObjectNames):
+            dropAreaText = QLabel(text)
+            dropAreaText.setObjectName(name)
+            dropAreaLayout.addWidget(dropAreaText)
+
+        layout.addWidget(self.dropAreaFrame, 1)
 
         readOnlyCheckBox = QCheckBox("Open fonts in read-only mode")
         readOnlyCheckBox.setCheckState(
@@ -326,11 +330,12 @@ class FontraMainWidget(QMainWindow):
         readOnlyCheckBox.stateChanged.connect(
             lambda s: applicationSettings.setValue("openFontsInReadOnlyMode", bool(s))
         )
-        layout.addWidget(readOnlyCheckBox, 2, 0)
+        layout.addWidget(readOnlyCheckBox)
 
         self.sampleTextBox = QPlainTextEdit(
             applicationSettings.value("editorSampleText", ""), self
         )
+        self.sampleTextBox.setTabChangesFocus(True)
         self.sampleTextBox.setFixedHeight(50)
         self.sampleTextBox.setPlaceholderText(
             "Enter some text to launch into the editor view,\n"
@@ -342,27 +347,12 @@ class FontraMainWidget(QMainWindow):
                 "editorSampleText", self.sampleTextBox.toPlainText()
             )
         )
-        layout.addWidget(QLabel("Sample text:"), 3, 0)
-        layout.addWidget(self.sampleTextBox, 4, 0, 1, 2)
-
-        layout.addWidget(QLabel(f"Fontra version {fontraVersion}"), 5, 0)
-
-        if sys.platform in {"darwin", "win32", "linux"} and not runningAsFlatpak():
-            self.downloadButton = QPushButton("Download latest Fontra Pak", self)
-            self.downloadButton.setSizePolicy(
-                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
-            )
-            self.downloadButton.clicked.connect(self.goToLatestDownload)
-            layout.addWidget(
-                self.downloadButton, 5, 1, alignment=Qt.AlignmentFlag.AlignRight
-            )
-            if "test-startup" not in sys.argv:
-                self.checkForUpdate(1500)
+        layout.addWidget(QLabel("Sample text:"))
+        layout.addWidget(self.sampleTextBox)
 
         widget = QWidget()
         widget.setLayout(layout)
         self.setCentralWidget(widget)
-        self.show()
 
     def closeEvent(self, event):
         if self.openProjects:
@@ -372,6 +362,7 @@ class FontraMainWidget(QMainWindow):
                 buttons=QMessageBox.StandardButton.Close
                 | QMessageBox.StandardButton.Cancel,
                 defaultButton=QMessageBox.StandardButton.Cancel,
+                parent=self,
             )
             if response == QMessageBox.StandardButton.Cancel:
                 event.ignore()
@@ -379,19 +370,20 @@ class FontraMainWidget(QMainWindow):
         applicationSettings.setValue("size", self.size())
         applicationSettings.setValue("pos", self.pos())
 
+        QApplication.closeAllWindows()
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.accept()
-            self.label.setStyleSheet(droppingCSS)
+            self.dropAreaFrame.setDropping(True)
         else:
             event.ignore()
 
     def dragLeaveEvent(self, event):
-        self.label.setStyleSheet("background-color: lightgray;")
-        self.label.setStyleSheet(neutralCSS)
+        self.dropAreaFrame.setDropping(False)
 
     def dropEvent(self, event):
-        self.label.setStyleSheet(neutralCSS)
+        self.dropAreaFrame.setDropping(False)
         files = [u.toLocalFile() for u in event.mimeData().urls()]
         for path in files:
             openFile(path, self.port)
@@ -426,7 +418,7 @@ class FontraMainWidget(QMainWindow):
         try:
             asyncio.run(createNewFontAndPopulate(fontPath))
         except Exception as e:
-            showMessageDialog("The new font could not be saved", repr(e))
+            showMessageDialog("The new font could not be saved", repr(e), parent=self)
             return
 
         if os.path.exists(fontPath):
@@ -443,6 +435,7 @@ class FontraMainWidget(QMainWindow):
             showMessageDialog(
                 "Cannot open " + ", ".join(notFonts),
                 "Not a font, or not a supported font format",
+                parent=self,
             )
 
         if fontPaths:
@@ -450,6 +443,16 @@ class FontraMainWidget(QMainWindow):
 
         for fontPath in fontPaths:
             openFile(fontPath, self.port)
+
+    def preferences(self):
+        if self.preferencesWindow is None or not self.preferencesWindow.isVisible():
+            self.preferencesWindow = PreferencesWindow()
+        self.preferencesWindow.show()
+        self.preferencesWindow.activateWindow()
+        self.preferencesWindow.raise_()
+
+    def quit(self):
+        QApplication.instance().quit()
 
     def messageFromServer(self, item):
         action, arguments = item
@@ -490,6 +493,7 @@ class FontraMainWidget(QMainWindow):
             showMessageDialog(
                 "Cannot export font",
                 "The destination file cannot be the same as the source file",
+                parent=self,
             )
             return
 
@@ -542,6 +546,7 @@ class FontraMainWidget(QMainWindow):
                             "The font could not be exported",
                             infoText,
                             detailedText=logData,
+                            parent=self,
                         )
             finally:
                 os.unlink(logFilePath)
@@ -570,9 +575,7 @@ class FontraMainWidget(QMainWindow):
         latestVersion, downloadURL = fetchLatestReleaseInfo()
 
         if downloadURL is not None and latestVersion != fontraVersion:
-            callInMainThread(
-                self.downloadButton.setText, "‼️ A new version is available ‼️"
-            )
+            callInMainThread(self.downloadButton.setVisible, True)
         else:
             # Try again in a bit more than a day
             hours = 24 + 4 * random()
@@ -588,6 +591,67 @@ class FontraMainWidget(QMainWindow):
             downloadURL = latestReleasePageURL
 
         openURL(downloadURL)
+
+    def aboutFontra(self):
+        showMessageDialog(
+            "Fontra",
+            f"Version: {fontraVersion}",
+            icon=QMessageBox.Icon.Information,
+            buttons=QMessageBox.StandardButton.Ok,
+            defaultButton=QMessageBox.StandardButton.Ok,
+            parent=self,
+        )
+
+
+class PreferencesWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle("Fontra Pak Preferences")
+        self.setMinimumWidth(450)
+        self.setMinimumHeight(100)
+        self.setMaximumHeight(100)
+
+        pluginsLabel = QLabel("Plugins folder:")
+
+        buttonAskFolder = QPushButton("&Choose...", self)
+        buttonAskFolder.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        buttonAskFolder.clicked.connect(self.askFolder)
+
+        self.pluginsDirectoryLabel = QLabel(
+            applicationSettings.value("plugins-dir", "")
+        )
+        self.pluginsDirectoryLabel.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+
+        pathLayout = QHBoxLayout()
+        pathLayout.addWidget(buttonAskFolder)
+        pathLayout.addWidget(self.pluginsDirectoryLabel)
+
+        layout = QVBoxLayout()
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(pluginsLabel)
+        layout.addLayout(pathLayout)
+        layout.addStretch()
+
+        self.setLayout(layout)
+
+        self.resize(applicationSettings.value("prefs-size", QSize(600, 150)))
+        self.move(applicationSettings.value("prefs-pos", QPoint(150, 150)))
+
+    def askFolder(self):
+        previousPath = applicationSettings.value("plugins-dir", "")
+        result = QFileDialog.getExistingDirectory(directory=previousPath)
+        if result:
+            applicationSettings.setValue("plugins-dir", result)
+            self.pluginsDirectoryLabel.setText(result)
+
+    def closeEvent(self, event):
+        applicationSettings.setValue("prefs-size", self.size())
+        applicationSettings.setValue("prefs-pos", self.pos())
 
 
 def fetchLatestReleaseInfo() -> tuple[str, str | None]:
@@ -718,14 +782,15 @@ def showMessageDialog(
     icon=QMessageBox.Icon.Warning,
     buttons=None,
     defaultButton=None,
+    parent=None,
 ):
-    dialog = QMessageBox()
+    dialog = QMessageBox(parent)
+    dialog.setWindowTitle("Fontra Pak")
     if icon is not None:
         dialog.setIcon(icon)
     dialog.setText(message)
     dialog.setInformativeText(infoText)
     if detailedText is not None:
-        dialog.setStyleSheet("QTextEdit { font-weight: regular; }")
         dialog.setDetailedText(detailedText)
     if buttons is not None:
         dialog.setStandardButtons(buttons)
@@ -759,7 +824,7 @@ class ProjectOpenListener:
         self.appQueue.put(("projectClosed", (projectIdentifier,)))
 
 
-def runFontraServer(host, port, queue):
+def runFontraServer(host, port, pluginsDirectory, queue):
     logging.basicConfig(
         format="%(asctime)s %(name)-17s %(levelname)-8s %(message)s",
         level=logging.INFO,
@@ -777,6 +842,9 @@ def runFontraServer(host, port, queue):
         httpPort=port,
         projectManager=projectManager,
         versionToken=secrets.token_hex(4),
+        pluginsDirectory=(
+            pathlib.Path(pluginsDirectory) if pluginsDirectory is not None else None
+        ),
     )
     server.setup()
     server.run(showLaunchBanner=False)
@@ -907,7 +975,13 @@ def main():
     host = "localhost"
     port = findFreeTCPPort(host=host)
     serverProcess = multiprocessing.Process(
-        target=runFontraServer, args=(host, port, queue)
+        target=runFontraServer,
+        args=(
+            host,
+            port,
+            applicationSettings.value("plugins-dir") or None,
+            queue,
+        ),
     )
     serverProcess.start()
 
@@ -940,6 +1014,8 @@ def main():
     app.aboutToQuit.connect(cleanup)
 
     mainWindow = FontraMainWidget(port)
+
+    app.setStyleSheet(resourcePath("style/style.qss").read_text(encoding="utf-8"))
 
     thread = callInNewThread(queueGetter, queue, mainWindow.messageFromServer)
 
