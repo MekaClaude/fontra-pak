@@ -1,0 +1,73 @@
+name: Build macOS app (unsigned)
+
+# Builds a macOS disk image of *this fork*.
+#
+# The upstream workflow (python-app.yml) builds the upstream fontra from
+# git, and then signs and notarizes the result — which needs the signing
+# certificate and the notarization credentials that this fork does not have.
+#
+# This workflow builds the fontra of the fork's own branch instead, and
+# produces an *unsigned* disk image. It is meant for testing on Apple
+# Silicon; a signed build needs the certificates.
+
+on:
+  workflow_dispatch:
+    inputs:
+      fontra_ref:
+        description: "The fontra branch to build"
+        default: "code-review-feedback-42427"
+        required: false
+        type: string
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Git checkout (fontra-pak)
+        uses: actions/checkout@v4
+
+      - name: Git checkout (fontra)
+        uses: actions/checkout@v4
+        with:
+          repository: MekaClaude/fontra
+          ref: ${{ inputs.fontra_ref }}
+          path: fontra
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+          cache-dependency-path: fontra/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Install the fontra of the fork
+        # The wheel build hook of fontra runs `npm install` and
+        # `npm run bundle`, so the client bundle in the image is the one of
+        # this fork, not of upstream.
+        run: pip install ./fontra
+
+      - name: Build app with PyInstaller
+        run: pyinstaller FontraPak.spec -y
+
+      - name: Build the disk image
+        run: |
+          python macos/build_dmg.py "dist/Fontra Pak.app" "dist/FontraPak-MacOS-arm64.dmg"
+          ls -la dist
+
+      - name: Store the disk image
+        uses: actions/upload-artifact@v4
+        with:
+          name: FontraPak-MacOS-arm64
+          path: ./dist/*.dmg
