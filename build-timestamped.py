@@ -5,43 +5,51 @@ Creates version based on current date/time: YYYY.MM.DD.HH
 Outputs to dist/Fontra-Pak-v{version}/Fontra Pak.exe
 """
 
-import os
-import sys
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
+
 
 def run_command(cmd, cwd=None, description=""):
     """Run a command and check for errors"""
     print(f"{description}...")
     use_shell = isinstance(cmd, str)
-    result = subprocess.run(cmd, shell=use_shell, cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run(
+        cmd, shell=use_shell, cwd=cwd, capture_output=True, text=True
+    )
     if result.returncode != 0:
-        cmd_str = cmd if isinstance(cmd, str) else ' '.join(cmd)
+        cmd_str = cmd if isinstance(cmd, str) else " ".join(cmd)
         print(f"Command failed: {cmd_str}")
         print("STDOUT:", result.stdout)
         print("STDERR:", result.stderr)
         sys.exit(1)
     return result
 
+
 def check_python():
     """Check Python version"""
     print("Checking Python version...")
-    result = subprocess.run([sys.executable, "--version"], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "--version"], capture_output=True, text=True
+    )
     if result.returncode != 0:
         print("ERROR: Python not found")
         sys.exit(1)
     print(result.stdout.strip())
 
+
 def get_timestamp_version():
     """Get version string in format YYYY.MM.DD.HH (GMT+1 / Europe/Paris)"""
     try:
         from zoneinfo import ZoneInfo
+
         now = datetime.now(ZoneInfo("Europe/Paris"))
     except Exception:
         now = datetime.now()
     return f"{now.year}.{now.month:02d}.{now.day:02d}.{now.hour:02d}"
+
 
 def verify_fontra_version(version):
     """Check that the installed fontra package reports the stamped version.
@@ -81,38 +89,42 @@ def verify_fontra_version(version):
         )
     print(f"fontra.__version__ is {installed} ({fontra.__file__})")
 
+
 def update_fontra_version(version):
     """Update src/fontra/_version.py"""
     version_py_path = Path("../src/fontra/_version.py")
 
     import re
 
-    content = version_py_path.read_text(encoding='utf-8')
+    content = version_py_path.read_text(encoding="utf-8")
 
-    year, month, day, hour = version.split('.')
+    year, month, day, hour = version.split(".")
     version_str = f"{int(year)}.{int(month):02d}.{int(day):02d}.{int(hour):02d}"
     version_tuple = f"({int(year)}, {int(month)}, {int(day)}, {int(hour)})"
 
     content = re.sub(
         r"__version__ = version = '[^']*'",
         f"__version__ = version = '{version_str}'",
-        content
+        content,
     )
     content = re.sub(
         r"__version_tuple__ = version_tuple = \([^)]*\)",
         f"__version_tuple__ = version_tuple = {version_tuple}",
-        content
+        content,
     )
 
-    version_py_path.write_text(content, encoding='utf-8')
+    version_py_path.write_text(content, encoding="utf-8")
     print(f"Updated src/fontra/_version.py to version {version}")
+
 
 def build_executable():
     """Build the executable using PyInstaller"""
     print("Building executable...")
-    result = subprocess.run([
-        sys.executable, "-m", "PyInstaller", "FontraPak.spec", "--clean"
-    ], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-m", "PyInstaller", "FontraPak.spec", "--clean"],
+        capture_output=True,
+        text=True,
+    )
 
     if result.returncode != 0:
         print("Build failed!")
@@ -121,6 +133,7 @@ def build_executable():
         sys.exit(1)
 
     print("Build successful!")
+
 
 def create_versioned_folder(version):
     """Create versioned output folder and copy executable"""
@@ -142,6 +155,7 @@ def create_versioned_folder(version):
     else:
         print(f"Warning: {exe_path} not found!")
 
+
 def main():
     print("Fontra Pak Timestamped Build")
     print("=" * 40)
@@ -159,28 +173,20 @@ def main():
     # built executable reports the timestamped version.
     run_command(
         [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
-        description="Installing dependencies"
+        description="Installing dependencies",
     )
     run_command(
         [sys.executable, "-m", "pip", "install", "-r", "requirements-dev.txt"],
-        description="Installing dev dependencies"
+        description="Installing dev dependencies",
     )
     run_command(
         [sys.executable, "-m", "pip", "install", "-e", ".."],
-        description="Installing local fontra package"
+        description="Installing local fontra package",
     )
 
     # Build client bundle
-    run_command(
-        "npm install",
-        cwd="..",
-        description="Installing npm dependencies"
-    )
-    run_command(
-        "npm run bundle",
-        cwd="..",
-        description="Building Fontra client bundle"
-    )
+    run_command("npm install", cwd="..", description="Installing npm dependencies")
+    run_command("npm run bundle", cwd="..", description="Building Fontra client bundle")
 
     # Update the version (after install, so vcs-versioning doesn't overwrite),
     # then check that the installed package reports it. FontraPak.spec builds
@@ -197,6 +203,7 @@ def main():
 
     print("\nBuild completed successfully!")
     print(f"Output: dist/Fontra-Pak-v{version}/Fontra Pak.exe")
+
 
 if __name__ == "__main__":
     main()
