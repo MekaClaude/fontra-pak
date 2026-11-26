@@ -121,8 +121,7 @@ def build_executable():
     """Build the executable using PyInstaller"""
     print("Building executable...")
     result = subprocess.run(
-        [sys.executable, "-m", "PyInstaller", "FontraPak.spec", "--clean",
-         "--additional-hooks-dir", "."],
+        [sys.executable, "-m", "PyInstaller", "FontraPak.spec", "--clean"],
         capture_output=True,
         text=True,
     )
